@@ -6,8 +6,10 @@ from discord.ext import commands
 from discord.ui import Button, Modal, Select, TextInput, View
 from aiohttp import web
 
+# 環境変数からトークンを取得
 TOKEN = os.getenv("TOKEN")
 
+# Botのインテント設定
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -17,16 +19,15 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 report_channels = {}
 
 
-# 1. 詳細な理由や対象者を入力するモーダル（フォーム）
+# 1. 通報フォーム（モーダル）
 class DetailedReportModal(Modal):
 
   def __init__(self, category: str):
     super().__init__(title=f"通報フォーム ({category})")
     self.category = category
 
-    # フォーム1: 通報したい人
     self.target_user = TextInput(
-        label="通報したい人 (ユーザー名やIDなど)",
+        label="通報したい人 (ユーザー名やID)",
         style=discord.TextStyle.short,
         placeholder="例: @yamada または 123456789 (不明なら「なし」)",
         required=True,
@@ -34,7 +35,6 @@ class DetailedReportModal(Modal):
     )
     self.add_item(self.target_user)
 
-    # フォーム2: 通報の理由・詳細
     self.reason = TextInput(
         label="詳しい状況や理由",
         style=discord.TextStyle.paragraph,
@@ -87,7 +87,7 @@ class DetailedReportModal(Modal):
       )
 
 
-# 2. 5つのカテゴリーを選ぶセレクトメニュー
+# 2. カテゴリー選択セレクトメニュー
 class ReportSelect(Select):
 
   def __init__(self):
@@ -127,7 +127,6 @@ class ReportSelect(Select):
 
   async def callback(self, interaction: discord.Interaction):
     selected_category = self.values[0]
-    # 選ばれたカテゴリを保持したままモーダルを表示
     await interaction.response.send_modal(
         DetailedReportModal(category=selected_category)
     )
@@ -140,7 +139,7 @@ class ReportSelectView(View):
     self.add_item(ReportSelect())
 
 
-# 3. チケットを閉じる際の確認用ビュー
+# 3. チケット確認用ビュー
 class CloseConfirmView(View):
 
   def __init__(self):
@@ -200,7 +199,6 @@ class TicketControlView(View):
   async def report_ticket(
       self, interaction: discord.Interaction, button: Button
   ):
-    # カテゴリ選択用のセレクトメニューを送信
     await interaction.response.send_message(
         "通報する内容のカテゴリーを選んでください：",
         view=ReportSelectView(),
@@ -208,7 +206,7 @@ class TicketControlView(View):
     )
 
 
-# 5. チケット作成パネル
+# 5. チケット作成用パネル
 class TicketView(View):
 
   def __init__(self):
@@ -275,7 +273,7 @@ async def on_ready():
     print(e)
 
 
-# /ticket_panel スラッシュコマンド
+# /ticket_panel コマンド
 @bot.tree.command(
     name="ticket_panel", description="チケット作成パネルを送信します"
 )
@@ -310,7 +308,7 @@ async def ticket_panel_error(
       )
 
 
-# /report_setup スラッシュコマンド
+# /report_setup コマンド
 @bot.tree.command(
     name="report_setup", description="通報通知を受け取るチャンネルを設定します"
 )
@@ -322,7 +320,7 @@ async def report_setup(
   report_channels[interaction.guild_id] = channel.id
   await interaction.response.send_message(
       f"通報通知チャンネルを {channel.mention} に設定しました！", ephemeral=True
-    )
+  )
 
 
 @report_setup.error
@@ -340,7 +338,7 @@ async def report_setup_error(
       )
 
 
-# 簡易Webサーバーの設定（Renderのポート対策用）
+# 簡易Webサーバーの設定（Render対策）
 routes = web.RouteTableDef()
 
 
