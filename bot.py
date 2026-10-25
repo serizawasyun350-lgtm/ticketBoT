@@ -3,7 +3,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, Modal, TextInput, View
+from discord.ui import Button, Modal, Select, TextInput, View
 from aiohttp import web
 
 TOKEN = os.getenv("TOKEN")
@@ -17,15 +17,32 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 report_channels = {}
 
 
-# 1. 通報理由を入力するモーダル
-class ReportModal(Modal, title="サーバー管理者に通報する"):
-  reason = TextInput(
-      label="通報理由",
-      style=discord.TextStyle.paragraph,
-      placeholder="不正行為や荒らし、迷惑行為の内容を詳しく記入してください...",
-      required=True,
-      max_length=1000,
-  )
+# 1. 詳細な理由や対象者を入力するモーダル（フォーム）
+class DetailedReportModal(Modal):
+
+  def __init__(self, category: str):
+    super().__init__(title=f"通報フォーム ({category})")
+    self.category = category
+
+    # フォーム1: 通報したい人
+    self.target_user = TextInput(
+        label="通報したい人 (ユーザー名やIDなど)",
+        style=discord.TextStyle.short,
+        placeholder="例: @yamada または 123456789 (不明なら「なし」)",
+        required=True,
+        max_length=100,
+    )
+    self.add_item(self.target_user)
+
+    # フォーム2: 通報の理由・詳細
+    self.reason = TextInput(
+        label="詳しい状況や理由",
+        style=discord.TextStyle.paragraph,
+        placeholder="いつ、どこで、どのような行為があったか詳しく記入してください...",
+        required=True,
+        max_length=1000,
+    )
+    self.add_item(self.reason)
 
   async def on_submit(self, interaction: discord.Interaction):
     guild = interaction.guild
@@ -37,15 +54,21 @@ class ReportModal(Modal, title="サーバー管理者に通報する"):
         color=discord.Color.orange(),
     )
     embed.add_field(
+        name="通報カテゴリ", value=self.category, inline=False
+    )
+    embed.add_field(
         name="通報者",
         value=f"{interaction.user} (ID: {interaction.user.id})",
         inline=False,
     )
     embed.add_field(
+        name="通報したい人", value=self.target_user.value, inline=False
+    )
+    embed.add_field(
         name="対象チャンネル", value=interaction.channel.mention, inline=False
     )
     embed.add_field(
-        name="通報理由", value=self.reason.value, inline=False
+        name="詳細な理由", value=self.reason.value, inline=False
     )
     embed.set_footer(
         text=f"サーバー名: {guild.name}",
@@ -64,7 +87,60 @@ class ReportModal(Modal, title="サーバー管理者に通報する"):
       )
 
 
-# 2. チケットを閉じる際の確認用ビュー
+# 2. 5つのカテゴリーを選ぶセレクトメニュー
+class ReportSelect(Select):
+
+  def __init__(self):
+    options = [
+        discord.SelectOption(
+            label="荒らし行為",
+            description="サーバーやチャンネルを荒らす行為",
+            emoji="💥",
+        ),
+        discord.SelectOption(
+            label="スパム・宣伝",
+            description="無関係な宣伝やスパムメッセージの送信",
+            emoji="📢",
+        ),
+        discord.SelectOption(
+            label="暴言・ハラスメント",
+            description="攻撃的な発言や嫌がらせ行為",
+            emoji="⚠️",
+        ),
+        discord.SelectOption(
+            label="迷惑行為",
+            description="ルール違反や周りのユーザーへの迷惑行為",
+            emoji="🛑",
+        ),
+        discord.SelectOption(
+            label="その他",
+            description="上記に当てはまらないその他の問題",
+            emoji="📌",
+        ),
+    ]
+    super().__init__(
+        placeholder="通報のカテゴリーを選択してください...",
+        min_values=1,
+        max_values=1,
+        options=options,
+    )
+
+  async def callback(self, interaction: discord.Interaction):
+    selected_category = self.values[0]
+    # 選ばれたカテゴリを保持したままモーダルを表示
+    await interaction.response.send_modal(
+        DetailedReportModal(category=selected_category)
+    )
+
+
+class ReportSelectView(View):
+
+  def __init__(self):
+    super().__init__(timeout=60)
+    self.add_item(ReportSelect())
+
+
+# 3. チケットを閉じる際の確認用ビュー
 class CloseConfirmView(View):
 
   def __init__(self):
@@ -96,7 +172,7 @@ class CloseConfirmView(View):
     await interaction.response.send_message("キャンセルしました。", ephemeral=True)
 
 
-# 3. チケットコントロールパネル
+# 4. チケットコントロールパネル
 class TicketControlView(View):
 
   def __init__(self):
@@ -124,10 +200,15 @@ class TicketControlView(View):
   async def report_ticket(
       self, interaction: discord.Interaction, button: Button
   ):
-    await interaction.response.send_modal(ReportModal())
+    # カテゴリ選択用のセレクトメニューを送信
+    await interaction.response.send_message(
+        "通報する内容のカテゴリーを選んでください：",
+        view=ReportSelectView(),
+        ephemeral=True,
+    )
 
 
-# 4. チケット作成パネル
+# 5. チケット作成パネル
 class TicketView(View):
 
   def __init__(self):
@@ -241,7 +322,7 @@ async def report_setup(
   report_channels[interaction.guild_id] = channel.id
   await interaction.response.send_message(
       f"通報通知チャンネルを {channel.mention} に設定しました！", ephemeral=True
-  )
+    )
 
 
 @report_setup.error
@@ -271,7 +352,7 @@ async def hello(request):
 async def run_web_server():
   app = web.Application()
   app.add_routes(routes)
-  port = int(os.environ.get("PORT", 10000))  # Render推奨のポート取得
+  port = int(os.environ.get("PORT", 10000))
   runner = web.AppRunner(app)
   await runner.setup()
   site = web.TCPSite(runner, "0.0.0.0", port)
@@ -280,7 +361,6 @@ async def run_web_server():
 
 
 async def main():
-  # Webサーバーを先に確実に立ち上げる
   await run_web_server()
   async with bot:
     await bot.start(TOKEN)
