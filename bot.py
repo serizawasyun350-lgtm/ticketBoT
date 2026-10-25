@@ -1,10 +1,11 @@
 import asyncio
 import os
 import discord
+from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import Button, Modal, TextInput, View
+from aiohttp import web
 
-# 環境変数名義を "TOKEN" に変更
 TOKEN = os.getenv("TOKEN")
 
 intents = discord.Intents.default()
@@ -12,8 +13,61 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 
+# サーバーごとの通報チャンネルIDを保存する辞書 (※Botを再起動するとリセットされます)
+report_channels = {}
 
-# チケットを閉じる際の確認用ビュー
+
+# 1. 通報理由を入力するモーダル（ポップアップ）
+class ReportModal(Modal, title="サーバー管理者に通報する"):
+  reason = TextInput(
+      label="通報理由",
+      style=discord.TextStyle.paragraph,
+      placeholder="不正行為や荒らし、迷惑行為の内容を詳しく記入してください...",
+      required=True,
+      max_length=1000,
+  )
+
+  async def on_submit(self, interaction: discord.Interaction):
+    guild = interaction.guild
+    # このサーバーに設定された通報チャンネルIDを取得
+    channel_id = report_channels.get(guild.id)
+    report_channel = guild.get_channel(channel_id) if channel_id else None
+
+    # 埋め込み（Embed）で管理者向けに通報内容を作成
+    embed = discord.Embed(
+        title="🚨 新しい通報がありました",
+        color=discord.Color.orange(),
+    )
+    embed.add_field(
+        name="通報者",
+        value=f"{interaction.user} (ID: {interaction.user.id})",
+        inline=False,
+    )
+    embed.add_field(
+        name="対象チャンネル", value=interaction.channel.mention, inline=False
+    )
+    embed.add_field(
+        name="通報理由", value=self.reason.value, inline=False
+    )
+    embed.set_footer(
+        text=f"サーバー名: {guild.name}",
+        icon_url=guild.icon.url if guild.icon else None,
+    )
+
+    # 通報チャンネルが設定されている場合は送信
+    if report_channel:
+      await report_channel.send(embed=embed)
+      await interaction.response.send_message(
+          "管理者へ通報を送信しました。ご協力ありがとうございます。", ephemeral=True
+      )
+    else:
+      await interaction.response.send_message(
+          "エラー: このサーバーの通報チャンネルが設定されていません。管理者に `/report_setup` の実行をお願いしてください。",
+          ephemeral=True,
+      )
+
+
+# 2. チケットを閉じる際の確認用ビュー
 class CloseConfirmView(View):
 
   def __init__(self):
@@ -45,7 +99,7 @@ class CloseConfirmView(View):
     await interaction.response.send_message("キャンセルしました。", ephemeral=True)
 
 
-# チケット内部に表示されるコントロールパネル（閉じるボタンなど）
+# 3. チケット内部に表示されるコントロールパネル（閉じるボタン ＋ 通報ボタン）
 class TicketControlView(View):
 
   def __init__(self):
@@ -65,8 +119,18 @@ class TicketControlView(View):
         ephemeral=True,
     )
 
+  @discord.ui.button(
+      label="🚨 管理者へ通報",
+      style=discord.ButtonStyle.secondary,
+      custom_id="report_ticket",
+  )
+  async def report_ticket(
+      self, interaction: discord.Interaction, button: Button
+  ):
+    await interaction.response.send_modal(ReportModal())
 
-# 最初のエントリーパネル（チケット作成ボタン）
+
+# 4. 最初のエントリーパネル（チケット作成ボタン）
 class TicketView(View):
 
   def __init__(self):
@@ -126,11 +190,19 @@ async def on_ready():
   bot.add_view(TicketView())
   bot.add_view(TicketControlView())
 
+  try:
+    synced = await bot.tree.sync()
+    print(f"{len(synced)} 個のスラッシュコマンドを同期しました。")
+  except Exception as e:
+    print(e)
 
-@bot.command(name="ticket_panel")
-@commands.has_permissions(administrator=True)
-async def ticket_panel(ctx):
-  """チケット作成パネルを送信するコマンド"""
+
+# /ticket_panel スラッシュコマンド
+@bot.tree.command(
+    name="ticket_panel", description="チケット作成パネルを送信します"
+)
+@app_commands.checks.has_permissions(administrator=True)
+async def ticket_panel(interaction: discord.Interaction):
   embed = discord.Embed(
       title="🎫 お問い合わせチケット",
       description=(
@@ -139,15 +211,82 @@ async def ticket_panel(ctx):
       ),
       color=discord.Color.blue(),
   )
-  await ctx.send(embed=embed, view=TicketView())
+  await interaction.channel.send(embed=embed, view=TicketView())
+  await interaction.response.send_message(
+      "チケットパネルを送信しました！", ephemeral=True
+  )
 
 
 @ticket_panel.error
-async def ticket_panel_error(ctx, error):
-  if isinstance(error, commands.MissingPermissions):
-    await ctx.send(
-        "このコマンドを実行する権限（管理者権限）がありません。", ephemeral=True
-    )
+async def ticket_panel_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+):
+  if isinstance(error, app_commands.errors.MissingPermissions):
+    if interaction.response.is_done():
+      await interaction.followup.send(
+          "このコマンドを実行する権限（管理者権限）がありません。", ephemeral=True
+      )
+    else:
+      await interaction.response.send_message(
+          "このコマンドを実行する権限（管理者権限）がありません。", ephemeral=True
+      )
 
 
-bot.run(TOKEN)
+# /report_setup スラッシュコマンド（通報チャンネルの指定）
+@bot.tree.command(
+    name="report_setup", description="通報通知を受け取るチャンネルを設定します"
+)
+@app_commands.describe(channel="通報通知を送るテキストチャンネル")
+@app_commands.checks.has_permissions(administrator=True)
+async def report_setup(
+    interaction: discord.Interaction, channel: discord.TextChannel
+):
+  report_channels[interaction.guild_id] = channel.id
+  await interaction.response.send_message(
+      f"通報通知チャンネルを {channel.mention} に設定しました！", ephemeral=True
+  )
+
+
+@report_setup.error
+async def report_setup_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+):
+  if isinstance(error, app_commands.errors.MissingPermissions):
+    if interaction.response.is_done():
+      await interaction.followup.send(
+          "このコマンドを実行する権限（管理者権限）がありません。", ephemeral=True
+      )
+    else:
+      await interaction.response.send_message(
+          "このコマンドを実行する権限（管理者権限）がありません。", ephemeral=True
+      )
+
+
+# 簡易Webサーバーの設定（Renderのポート対策）
+routes = web.RouteTableDef()
+
+
+@routes.get("/")
+async def hello(request):
+  return web.Response(text="Bot is running!")
+
+
+async def run_web_server():
+  app = web.Application()
+  app.add_routes(routes)
+  port = int(os.environ.get("PORT", 8080))
+  runner = web.AppRunner(app)
+  await runner.setup()
+  site = web.TCPSite(runner, "0.0.0.0", port)
+  await site.start()
+  print(f"Web server started on port {port}")
+
+
+async def main():
+  await run_web_server()
+  async with bot:
+    await bot.start(TOKEN)
+
+
+if __name__ == "__main__":
+  asyncio.run(main())
