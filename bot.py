@@ -13,11 +13,11 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# サーバーごとの通報チャンネルIDを保存する辞書 (※Botを再起動するとリセットされます)
+# サーバーごとの通報チャンネルIDを保存する辞書
 report_channels = {}
 
 
-# 1. 通報理由を入力するモーダル（ポップアップ）
+# 1. 通報理由を入力するモーダル
 class ReportModal(Modal, title="サーバー管理者に通報する"):
   reason = TextInput(
       label="通報理由",
@@ -29,11 +29,9 @@ class ReportModal(Modal, title="サーバー管理者に通報する"):
 
   async def on_submit(self, interaction: discord.Interaction):
     guild = interaction.guild
-    # このサーバーに設定された通報チャンネルIDを取得
     channel_id = report_channels.get(guild.id)
     report_channel = guild.get_channel(channel_id) if channel_id else None
 
-    # 埋め込み（Embed）で管理者向けに通報内容を作成
     embed = discord.Embed(
         title="🚨 新しい通報がありました",
         color=discord.Color.orange(),
@@ -54,7 +52,6 @@ class ReportModal(Modal, title="サーバー管理者に通報する"):
         icon_url=guild.icon.url if guild.icon else None,
     )
 
-    # 通報チャンネルが設定されている場合は送信
     if report_channel:
       await report_channel.send(embed=embed)
       await interaction.response.send_message(
@@ -99,7 +96,7 @@ class CloseConfirmView(View):
     await interaction.response.send_message("キャンセルしました。", ephemeral=True)
 
 
-# 3. チケット内部に表示されるコントロールパネル（閉じるボタン ＋ 通報ボタン）
+# 3. チケットコントロールパネル
 class TicketControlView(View):
 
   def __init__(self):
@@ -130,7 +127,7 @@ class TicketControlView(View):
     await interaction.response.send_modal(ReportModal())
 
 
-# 4. 最初のエントリーパネル（チケット作成ボタン）
+# 4. チケット作成パネル
 class TicketView(View):
 
   def __init__(self):
@@ -232,7 +229,7 @@ async def ticket_panel_error(
       )
 
 
-# /report_setup スラッシュコマンド（通報チャンネルの指定）
+# /report_setup スラッシュコマンド
 @bot.tree.command(
     name="report_setup", description="通報通知を受け取るチャンネルを設定します"
 )
@@ -262,7 +259,7 @@ async def report_setup_error(
       )
 
 
-# 簡易Webサーバーの設定（Renderのポート対策）
+# 簡易Webサーバーの設定（Renderのポート対策用）
 routes = web.RouteTableDef()
 
 
@@ -274,7 +271,7 @@ async def hello(request):
 async def run_web_server():
   app = web.Application()
   app.add_routes(routes)
-  port = int(os.environ.get("PORT", 8080))
+  port = int(os.environ.get("PORT", 10000))  # Render推奨のポート取得
   runner = web.AppRunner(app)
   await runner.setup()
   site = web.TCPSite(runner, "0.0.0.0", port)
@@ -283,6 +280,7 @@ async def run_web_server():
 
 
 async def main():
+  # Webサーバーを先に確実に立ち上げる
   await run_web_server()
   async with bot:
     await bot.start(TOKEN)
